@@ -1,19 +1,34 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { fetchProblem, submitCode, requestHint, fetchTracks } from "./api";
+import {
+  fetchProblem,
+  submitCode,
+  requestHint,
+  fetchTracks,
+  fetchMyGroups,
+  joinGroup,
+} from "./api";
 import type {
   Problem,
   SubmitResponse,
   HintResponse,
   HintRequest,
   Track,
+  StudentGroupOut,
 } from "./api";
 import CodeEditor from "./components/CodeEditor";
 import ProblemPanel from "./components/ProblemPanel";
 import ResultsPanel from "./components/ResultsPanel";
 import NavigationSidebar from "./components/NavigationSidebar";
+import TeacherDashboard from "./components/TeacherDashboard";
 
 function App() {
+  const [viewMode, setViewMode] = useState<"student" | "teacher">("student");
+
+  // Учебные треки и группы ученика
   const [tracks, setTracks] = useState<Track[]>([]);
+  const [myGroups, setMyGroups] = useState<StudentGroupOut[]>([]);
+
+  // Текущая задача
   const [activeProblemId, setActiveProblemId] = useState<number>(1);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [code, setCode] = useState("");
@@ -21,7 +36,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Сайдбар каталога
+  // Сайдбар каталога и заданий
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   // ИИ-подсказки
@@ -39,6 +54,25 @@ function App() {
       console.error("Не удалось загрузить треки:", e);
     }
   }, []);
+
+  // Загрузка групп и заданий ученика
+  const loadMyGroups = useCallback(async () => {
+    try {
+      const data = await fetchMyGroups();
+      setMyGroups(data);
+    } catch (e) {
+      console.error("Не удалось загрузить группы ученика:", e);
+    }
+  }, []);
+
+  // Вступление в группу
+  const handleJoinGroup = useCallback(
+    async (inviteCode: string, studentName: string) => {
+      await joinGroup(inviteCode, studentName);
+      await loadMyGroups();
+    },
+    [loadMyGroups]
+  );
 
   // Загрузка конкретной задачи
   const loadProblem = useCallback(async (id: number) => {
@@ -62,8 +96,9 @@ function App() {
   // Начальная инициализация
   useEffect(() => {
     loadTracks();
+    loadMyGroups();
     loadProblem(1);
-  }, [loadTracks, loadProblem]);
+  }, [loadTracks, loadMyGroups, loadProblem]);
 
   // Подсчёт общего прогресса (решено / всего)
   const stats = useMemo(() => {
@@ -139,8 +174,9 @@ function App() {
       const res = await submitCode(problem.id, code);
       setResult(res);
 
-      // Обновляем дерево треков, чтобы статус задачи (attempted/solved) обновился сразу
+      // Обновляем дерево треков и ДЗ ученика, чтобы статус задачи обновился везде
       loadTracks();
+      loadMyGroups();
 
       // Автоматически запрашиваем подсказку уровня 1
       if (res.status !== "accepted") {
@@ -169,6 +205,16 @@ function App() {
   const handleGoToLine = (line: number) => {
     setGoToLine(line);
   };
+
+  // Режим кабинета преподавателя
+  if (viewMode === "teacher") {
+    return (
+      <TeacherDashboard
+        tracks={tracks}
+        onExitToProblems={() => setViewMode("student")}
+      />
+    );
+  }
 
   if (error && !problem) {
     return (
@@ -200,11 +246,13 @@ function App() {
 
   return (
     <div className="h-screen flex flex-col bg-[#1a1a2e]">
-      {/* Сайдбар навигации по курсам */}
+      {/* Сайдбар навигации по курсам и заданиям */}
       <NavigationSidebar
         tracks={tracks}
+        myGroups={myGroups}
         activeProblemId={activeProblemId}
         onSelectProblem={(id) => loadProblem(id)}
+        onJoinGroup={handleJoinGroup}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
       />
@@ -212,13 +260,13 @@ function App() {
       {/* Header */}
       <header className="bg-[#12192f] border-b border-[#1f2d4e] px-4 py-2.5 flex items-center justify-between shrink-0 shadow-md">
         <div className="flex items-center gap-3">
-          {/* Кнопка открытия каталога */}
+          {/* Кнопка открытия каталога и заданий */}
           <button
             onClick={() => setIsSidebarOpen(true)}
             className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#1e293b] hover:bg-[#2d3748] text-gray-200 text-xs font-semibold border border-gray-700/60 transition-all active:scale-95 shadow-sm"
           >
             <span>📚</span>
-            <span>Каталог задач</span>
+            <span>Каталог и задания</span>
             {stats.total > 0 && (
               <span className="ml-1 px-1.5 py-0.5 rounded-full bg-indigo-900/60 text-indigo-300 text-[10px] border border-indigo-700/50">
                 {stats.solved}/{stats.total}
@@ -240,6 +288,16 @@ function App() {
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Кнопка входа в кабинет преподавателя */}
+          <button
+            onClick={() => setViewMode("teacher")}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-950/70 hover:bg-indigo-900/80 text-indigo-300 hover:text-white text-xs font-semibold border border-indigo-700/60 transition-all active:scale-95 shadow-sm"
+            title="Перейти в кабинет преподавателя"
+          >
+            <span>👨‍🏫</span>
+            <span className="hidden sm:inline">Кабинет преподавателя</span>
+          </button>
+
           <h1 className="text-sm font-bold text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-purple-400">
             🎓 SchoolLeetCode
           </h1>
