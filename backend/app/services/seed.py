@@ -7,7 +7,17 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Problem, TestCase, Topic, Track
+from app.models.models import (
+    Assignment,
+    AssignmentProblem,
+    GroupMember,
+    Problem,
+    StudyGroup,
+    Submission,
+    TestCase,
+    Topic,
+    Track,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -279,10 +289,16 @@ def _seed_data() -> list[dict]:
 
 
 async def seed_database(session: AsyncSession) -> None:
+    """Заполняет БД начальными данными (курсы и демо-группа), если они отсутствуют."""
+    await seed_tracks_and_problems(session)
+    await seed_study_groups(session)
+
+
+async def seed_tracks_and_problems(session: AsyncSession) -> None:
     """Заполняет БД начальными данными, если таблица tracks пуста."""
     result = await session.execute(select(Track).limit(1))
     if result.scalars().first() is not None:
-        logger.info("Seed: данные уже существуют, пропускаю.")
+        logger.info("Seed: треки уже существуют, пропускаю.")
         return
 
     logger.info("Seed: заполняю базу начальным контентом...")
@@ -329,4 +345,129 @@ async def seed_database(session: AsyncSession) -> None:
                     session.add(tc)
 
     await session.commit()
-    logger.info("Seed: готово!")
+    logger.info("Seed: треки готовы!")
+
+
+async def seed_study_groups(session: AsyncSession) -> None:
+    """Заполняет БД демо-группой и учениками, если таблица study_groups пуста."""
+    result = await session.execute(select(StudyGroup).limit(1))
+    if result.scalars().first() is not None:
+        logger.info("Seed: группы уже существуют, пропускаю.")
+        return
+
+    logger.info("Seed: создаю демо-группу и учеников...")
+
+    # 1. Группа
+    group = StudyGroup(name="9А — Демо-группа", invite_code="DEMO9A")
+    session.add(group)
+    await session.flush()
+
+    # 2. Домашняя работа с задачами 1, 2, 3
+    assignment = Assignment(group_id=group.id, title="Домашняя работа №1: Массивы")
+    session.add(assignment)
+    await session.flush()
+
+    for idx, pid in enumerate([1, 2, 3]):
+        ap = AssignmentProblem(
+            assignment_id=assignment.id,
+            problem_id=pid,
+            order_index=idx + 1,
+        )
+        session.add(ap)
+
+    # 3. Ученики
+    m1 = GroupMember(group_id=group.id, student_key="demo-student-1", student_name="Алексей Иванов")
+    m2 = GroupMember(group_id=group.id, student_key="demo-student-2", student_name="Мария Смирнова")
+    m3 = GroupMember(group_id=group.id, student_key="demo-student-3", student_name="Дмитрий Козлов")
+    session.add_all([m1, m2, m3])
+    await session.flush()
+
+    # 4. Попытки решений (Submissions)
+    # Студент 1 (Алексей Иванов): 1 accepted, 1 wrong_answer (i <= n)
+    s1_1 = Submission(
+        problem_id=1,
+        student_key="demo-student-1",
+        code=(
+            "#include <iostream>\nusing namespace std;\nint main() {\n"
+            "    int n;\n    if (!(cin >> n)) return 0;\n    long long sum = 0;\n"
+            "    for (int i = 0; i < n; i++) {\n        long long x;\n        cin >> x;\n"
+            "        if (x % 2 == 0) sum += x;\n    }\n    cout << sum;\n    return 0;\n}"
+        ),
+        status="accepted",
+        passed_count=5,
+        total_count=5,
+        error_message=None,
+    )
+    s1_2 = Submission(
+        problem_id=2,
+        student_key="demo-student-1",
+        code=(
+            "#include <iostream>\nusing namespace std;\nint main() {\n"
+            "    int n;\n    cin >> n;\n    int a[1005];\n    for (int i = 0; i <= n; i++) {\n"
+            "        cin >> a[i];\n    }\n    int count = 0;\n    for (int i = 0; i <= n; i++) {\n"
+            "        if (a[i] < 0) count++;\n    }\n    cout << count;\n    return 0;\n}"
+        ),
+        status="wrong_answer",
+        passed_count=1,
+        total_count=5,
+        error_message="Тест #1: неверный ответ (выход за границы массива i <= n)",
+    )
+
+    # Студент 2 (Мария Смирнова): 1 wrong_answer (sum += a[i]), 1 compile_error
+    s2_1 = Submission(
+        problem_id=1,
+        student_key="demo-student-2",
+        code=(
+            "#include <iostream>\nusing namespace std;\nint main() {\n"
+            "    int n;\n    cin >> n;\n    long long sum = 0;\n    for (int i = 0; i < n; i++) {\n"
+            "        long long x;\n        cin >> x;\n        sum += x;\n    }\n"
+            "    cout << sum;\n    return 0;\n}"
+        ),
+        status="wrong_answer",
+        passed_count=0,
+        total_count=5,
+        error_message="Тест #1: неверный ответ (ожидалось 6, получено 15)",
+    )
+    s2_2 = Submission(
+        problem_id=2,
+        student_key="demo-student-2",
+        code="#include <iostream>\nusing namespace std;\nint main() {\n    int n\n    cin >> n;\n    return 0;\n}",
+        status="compile_error",
+        passed_count=0,
+        total_count=5,
+        error_message="main.cpp:5:5: error: expected initializer before 'cin'",
+    )
+
+    # Студент 3 (Дмитрий Козлов): 1 wrong_answer (int sum не инициализирована и <= n), 1 accepted
+    s3_1 = Submission(
+        problem_id=1,
+        student_key="demo-student-3",
+        code=(
+            "#include <iostream>\nusing namespace std;\nint main() {\n"
+            "    int n;\n    cin >> n;\n    int sum;\n    for (int i = 0; i <= n; i++) {\n"
+            "        int x;\n        cin >> x;\n        if (x % 2 == 0) sum += x;\n    }\n"
+            "    cout << sum;\n    return 0;\n}"
+        ),
+        status="wrong_answer",
+        passed_count=0,
+        total_count=5,
+        error_message="Тест #1: неверный ответ (мусорное значение переменной sum)",
+    )
+    s3_2 = Submission(
+        problem_id=2,
+        student_key="demo-student-3",
+        code=(
+            "#include <iostream>\nusing namespace std;\nint main() {\n"
+            "    int n;\n    if (!(cin >> n)) return 0;\n    int count = 0;\n"
+            "    for (int i = 0; i < n; i++) {\n        int x;\n        cin >> x;\n"
+            "        if (x < 0) count++;\n    }\n    cout << count;\n    return 0;\n}"
+        ),
+        status="accepted",
+        passed_count=5,
+        total_count=5,
+        error_message=None,
+    )
+
+    session.add_all([s1_1, s1_2, s2_1, s2_2, s3_1, s3_2])
+    await session.commit()
+    logger.info("Seed: демо-группа и ученики готовы!")

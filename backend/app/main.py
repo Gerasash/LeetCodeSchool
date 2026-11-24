@@ -13,7 +13,7 @@ from pydantic.warnings import UnsupportedFieldAttributeWarning
 warnings.filterwarnings("ignore", category=UnsupportedFieldAttributeWarning)
 
 from app.core.database import Base, async_session, engine
-from app.routers import hints, problems, submit, tracks
+from app.routers import groups, hints, problems, submit, teacher, tracks
 from app.services.seed import seed_database
 
 
@@ -31,7 +31,7 @@ async def lifespan(app: FastAPI):
     await engine.dispose()
 
 
-app = FastAPI(title="SchoolLeetCode API", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="SchoolLeetCode API", version="0.4.0", lifespan=lifespan)
 
 # CORS — разрешаем локальный фронтенд
 app.add_middleware(
@@ -50,8 +50,10 @@ app.include_router(tracks.router, prefix="/api")
 app.include_router(problems.router, prefix="/api")
 app.include_router(submit.router, prefix="/api")
 app.include_router(hints.router, prefix="/api")
+app.include_router(groups.router, prefix="/api/groups")
+app.include_router(teacher.router, prefix="/api/teacher")
 
 
 @app.get("/")
 async def root():
-    return {"message": "SchoolLeetCode API v0.3.0"}
+    return {"message": "SchoolLeetCode API v0.4.0"}

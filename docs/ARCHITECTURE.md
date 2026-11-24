@@ -406,6 +406,311 @@
 }
 ```
 
-## Срез 4 — Кабинет преподавателя (будущее)
+## Срез 4 — Кабинет преподавателя, учебные группы и ИИ-аналитика
 
-Роли: ученик, преподаватель. Группы. Сводка ошибок.
+### 1. Расширение схемы базы данных
+
+```
+┌──────────────────┐       1:N       ┌──────────────────┐
+│   StudyGroup     │ ─────────────── │   GroupMember    │
+│ ──────────────── │                 │ ──────────────── │
+│ id (PK)          │                 │ id (PK)          │
+│ name             │                 │ group_id (FK)    │
+│ invite_code (UQ) │                 │ student_key      │
+│ created_at       │                 │ student_name     │
+└────────┬─────────┘                 │ joined_at        │
+         │                           └──────────────────┘
+         │ 1:N
+         ▼
+┌──────────────────┐       1:N       ┌──────────────────────┐
+│   Assignment     │ ─────────────── │  AssignmentProblem   │
+│ ──────────────── │                 │ ──────────────────── │
+│ id (PK)          │                 │ id (PK)              │
+│ group_id (FK)    │                 │ assignment_id (FK)   │
+│ title            │                 │ problem_id (FK)      │
+│ created_at       │                 │ order_index          │
+└──────────────────┘                 └──────────────────────┘
+```
+
+#### Таблица `study_groups` (учебные группы)
+- `id` (INTEGER, PK)
+- `name` (VARCHAR(128)) — название («9А — Демо-группа»)
+- `invite_code` (VARCHAR(16), UNIQUE) — 6-символьный код приглашения (например, `DEMO9A`, алфавит без неоднозначных символов 0/O/1/I)
+- `created_at` (DATETIME)
+
+#### Таблица `group_members` (ученики группы)
+- `id` (INTEGER, PK)
+- `group_id` (INTEGER, FK -> `study_groups.id`)
+- `student_key` (VARCHAR(64)) — анонимный UUID ученика из `X-Student-Key`
+- `student_name` (VARCHAR(128)) — отображаемое ФИО («Алексей Иванов»)
+- `joined_at` (DATETIME)
+- *Ограничение уникальности:* `(group_id, student_key)`
+
+#### Таблица `assignments` (домашние задания / контрольные работы)
+- `id` (INTEGER, PK)
+- `group_id` (INTEGER, FK -> `study_groups.id`)
+- `title` (VARCHAR(128)) — название («Домашняя работа №1: Массивы»)
+- `created_at` (DATETIME)
+
+#### Таблица `assignment_problems` (связка заданий с задачами)
+- `id` (INTEGER, PK)
+- `assignment_id` (INTEGER, FK -> `assignments.id`)
+- `problem_id` (INTEGER, FK -> `problems.id`)
+- `order_index` (INTEGER)
+- *Ограничение уникальности:* `(assignment_id, problem_id)`
+
+#### Изменение в таблице `submissions`
+- Добавлена колонка `error_message` (TEXT, nullable) — краткое описание ошибки или stderr упавшей попытки для быстрой ИИ-агрегации без разбора всего лога.
+
+---
+
+### 2. Авторизация преподавателя
+
+- Используется упрощённая схема авторизации через заголовок `X-Teacher-Key`.
+- Ключ задаётся в `.env` (`TEACHER_ACCESS_KEY="teacher123"`).
+- Все эндпоинты `/api/teacher/*` защищены FastAPI dependency `verify_teacher`. При отсутствии или несовпадении ключа возвращается `401 Unauthorized` с детальным сообщением.
+
+---
+
+### 3. Контракты API: Ученик и группы (`/api/groups`)
+
+#### `POST /api/groups/join`
+Присоединяет ученика к группе по коду приглашения. Идемпотентно: если ученик уже состоит в группе, обновляется его `student_name`.
+
+**Заголовки:**
+- `X-Student-Key` (обязателен, UUID ученика).
+
+**Request:**
+```json
+{
+  "inviteCode": "DEMO9A",
+  "studentName": "Иван Смирнов"
+}
+```
+
+**Response 200:**
+```json
+{
+  "groupId": 1,
+  "groupName": "9А — Демо-группа",
+  "inviteCode": "DEMO9A",
+  "studentName": "Иван Смирнов"
+}
+```
+
+#### `GET /api/groups/my`
+Возвращает список всех групп, в которых состоит ученик, со всеми выданными заданиями и персональным статусом выполнения каждой задачи (`solved`, `attempted`, `not_started`).
+
+**Заголовки:**
+- `X-Student-Key` (обязателен).
+
+**Response 200:**
+```json
+[
+  {
+    "groupId": 1,
+    "groupName": "9А — Демо-группа",
+    "inviteCode": "DEMO9A",
+    "studentName": "Иван Смирнов",
+    "assignments": [
+      {
+        "id": 1,
+        "title": "Домашняя работа №1: Массивы",
+        "problems": [
+          {
+            "id": 1,
+            "title": "Сумма чётных чисел в массиве",
+            "difficulty": "easy",
+            "status": "solved"
+          },
+          {
+            "id": 2,
+            "title": "Количество отрицательных элементов",
+            "difficulty": "easy",
+            "status": "attempted"
+          },
+          {
+            "id": 3,
+            "title": "Максимум последовательности",
+            "difficulty": "easy",
+            "status": "not_started"
+          }
+        ]
+      }
+    ]
+  }
+]
+```
+
+---
+
+### 4. Контракты API: Кабинет преподавателя (`/api/teacher`)
+
+Все эндпоинты требуют заголовок `X-Teacher-Key`.
+
+#### `POST /api/teacher/verify`
+Проверяет валидность ключа преподавателя.
+
+**Response 200:**
+```json
+{
+  "ok": true
+}
+```
+
+#### `GET /api/teacher/groups`
+Возвращает список созданных учебных групп со счётчиками учеников и выданных заданий.
+
+**Response 200:**
+```json
+[
+  {
+    "id": 1,
+    "name": "9А — Демо-группа",
+    "inviteCode": "DEMO9A",
+    "studentCount": 3,
+    "assignmentCount": 1,
+    "createdAt": "2026-11-24T12:00:00"
+  }
+]
+```
+
+#### `POST /api/teacher/groups`
+Создаёт новую учебную группу и генерирует уникальный 6-символьный инвайт-код.
+
+**Request:**
+```json
+{
+  "name": "10-Б Информатика"
+}
+```
+
+**Response 201:**
+```json
+{
+  "id": 2,
+  "name": "10-Б Информатика",
+  "inviteCode": "LS66XR",
+  "studentCount": 0,
+  "assignmentCount": 0,
+  "createdAt": "2026-11-24T16:55:00"
+}
+```
+
+#### `GET /api/teacher/groups/{groupId}`
+Возвращает подробную информацию о группе, список заданий, список уникальных задач и матрицу успеваемости всех учеников группы.
+
+**Response 200:**
+```json
+{
+  "group": {
+    "id": 1,
+    "name": "9А — Демо-группа",
+    "inviteCode": "DEMO9A"
+  },
+  "assignments": [
+    {
+      "id": 1,
+      "title": "Домашняя работа №1: Массивы",
+      "problems": [
+        {
+          "id": 1,
+          "title": "Сумма чётных чисел в массиве",
+          "difficulty": "easy"
+        }
+      ]
+    }
+  ],
+  "problems": [
+    {
+      "id": 1,
+      "title": "Сумма чётных чисел в массиве",
+      "difficulty": "easy"
+    }
+  ],
+  "students": [
+    {
+      "studentKey": "demo-student-1",
+      "studentName": "Алексей Иванов",
+      "solvedCount": 1,
+      "totalAttempts": 2,
+      "progress": [
+        {
+          "problemId": 1,
+          "status": "solved",
+          "attempts": 2,
+          "lastStatus": "accepted"
+        }
+      ]
+    }
+  ]
+}
+```
+
+#### `POST /api/teacher/groups/{groupId}/assignments`
+Создаёт новое задание (ДЗ) в группе с упорядоченным списком задач из каталога.
+
+**Request:**
+```json
+{
+  "title": "Домашняя работа №2: Поиск в массиве",
+  "problemIds": [1, 2, 4]
+}
+```
+
+**Response 201:**
+```json
+{
+  "id": 2,
+  "title": "Домашняя работа №2: Поиск в массиве",
+  "problems": [
+    {
+      "id": 1,
+      "title": "Сумма чётных чисел в массиве",
+      "difficulty": "easy"
+    },
+    {
+      "id": 2,
+      "title": "Количество отрицательных элементов",
+      "difficulty": "easy"
+    },
+    {
+      "id": 4,
+      "title": "Линейный поиск",
+      "difficulty": "easy"
+    }
+  ]
+}
+```
+
+#### `POST /api/teacher/groups/{groupId}/ai-summary`
+Генерирует сводку типичных ошибок учеников группы с помощью DeepSeek (`deepseek-chat`).
+
+**Правило приватности:** реальные имена учеников НИКОГДА не передаются в LLM. В запросе ученики анонимизируются как `Ученик #1`, `Ученик #2`.
+**Кэширование:** результат кэшируется в памяти по ключу `(group_id, problem_id, max_submission_id)`. Пока ученики не отправят новые решения, повторные запросы отдаются мгновенно без повторного расхода токенов.
+
+**Request:**
+```json
+{
+  "problemId": 1
+}
+```
+*(поле `problemId` опционально; если не передано — анализируются ошибки по всем задачам группы).*
+
+**Response 200:**
+```json
+{
+  "overallSummary": "Группа в целом понимает базовый синтаксис циклов, но допускает ошибки в инициализации аккумулятора...",
+  "analyzedSubmissionsCount": 2,
+  "analyzedStudentsCount": 2,
+  "commonMistakes": [
+    {
+      "title": "Неинициализированная переменная суммы",
+      "description": "Переменная sum объявлена без начального значения 0, из-за чего накапливается мусор из памяти.",
+      "affectedStudentsCount": 1,
+      "recommendation": "На уроке напомнить, что в C++ автоматические переменные не обнуляются по умолчанию."
+    }
+  ]
+}
+```
+

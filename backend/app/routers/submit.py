@@ -49,7 +49,11 @@ async def submit_solution(
     first_result = await execute_cpp(body.code, tests[0].input_data)
 
     if not first_result["compile_ok"]:
-        # Сохраняем попытку с ошибкой компиляции
+        err_msg = (
+            first_result["compile_stderr"][:500]
+            if first_result["compile_stderr"]
+            else "Ошибка компиляции"
+        )
         sub = Submission(
             problem_id=problem.id,
             student_key=student_key,
@@ -57,6 +61,7 @@ async def submit_solution(
             status="compile_error",
             passed_count=0,
             total_count=len(tests),
+            error_message=err_msg,
         )
         db.add(sub)
         await db.commit()
@@ -72,8 +77,9 @@ async def submit_solution(
     # 3. Прогон по всем тестам
     test_results: list[TestResult] = []
     overall_status = "accepted"
+    first_failed_desc: str | None = None
 
-    for tc in tests:
+    for i, tc in enumerate(tests):
         res = await execute_cpp(body.code, tc.input_data)
         actual = res["run_stdout"]
         expected = tc.expected_output.strip()
@@ -82,10 +88,15 @@ async def submit_solution(
         passed = (actual == expected) and (not stderr)
 
         if not passed:
-            if stderr and not actual:
-                overall_status = "runtime_error"
-            elif overall_status != "runtime_error":
-                overall_status = "wrong_answer"
+            fail_type = "ошибка выполнения" if (stderr and not actual) else "неверный ответ"
+            if overall_status != "runtime_error":
+                overall_status = "runtime_error" if (stderr and not actual) else "wrong_answer"
+
+            if first_failed_desc is None:
+                t_label = f"Скрытый тест #{i + 1}" if tc.is_hidden else f"Тест #{i + 1}"
+                first_failed_desc = f"{t_label}: {fail_type}"
+                if stderr:
+                    first_failed_desc += f" ({stderr[:200]})"
 
         # Правило скрытых тестов: скрываем ввод и ожидаемый/полученный вывод
         if tc.is_hidden:
@@ -121,6 +132,7 @@ async def submit_solution(
         status=overall_status,
         passed_count=passed_count,
         total_count=len(tests),
+        error_message=first_failed_desc if overall_status != "accepted" else None,
     )
     db.add(sub)
     await db.commit()

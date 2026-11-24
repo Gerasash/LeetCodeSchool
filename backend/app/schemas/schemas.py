@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import warnings
 from typing import Literal
 
@@ -121,3 +122,125 @@ class HintResponse(CamelModel):
     hint_text: str
     level: int
     can_escalate: bool
+
+
+# --- Учебные группы и задания (Срез 4: Ученик) ---
+
+
+class GroupJoinRequest(CamelModel):
+    invite_code: str
+    student_name: str
+
+
+class GroupJoinResponse(CamelModel):
+    group_id: int
+    group_name: str
+    invite_code: str
+    student_name: str
+
+
+class StudentAssignmentProblem(CamelModel):
+    id: int
+    title: str
+    difficulty: str
+    status: Literal["solved", "attempted", "not_started"] = "not_started"
+
+
+class StudentAssignment(CamelModel):
+    id: int
+    title: str
+    problems: list[StudentAssignmentProblem]
+
+
+class StudentGroupOut(CamelModel):
+    group_id: int
+    group_name: str
+    invite_code: str
+    student_name: str
+    assignments: list[StudentAssignment]
+
+
+# --- Кабинет преподавателя (Срез 4: Преподаватель) ---
+
+
+class TeacherVerifyResponse(CamelModel):
+    ok: bool = True
+
+
+class TeacherGroupListItem(CamelModel):
+    id: int
+    name: str
+    invite_code: str
+    student_count: int = 0
+    assignment_count: int = 0
+    created_at: datetime.datetime
+
+
+class TeacherCreateGroupRequest(CamelModel):
+    name: str
+
+
+class TeacherCreateAssignmentRequest(CamelModel):
+    title: str
+    problem_ids: list[int]
+
+
+class TeacherAssignmentProblemOut(CamelModel):
+    id: int
+    title: str
+    difficulty: str
+
+
+class TeacherAssignmentOut(CamelModel):
+    id: int
+    title: str
+    problems: list[TeacherAssignmentProblemOut]
+
+
+class StudentProblemProgress(CamelModel):
+    problem_id: int
+    status: Literal["solved", "attempted", "not_started"]
+    attempts: int = 0
+    last_status: str | None = None
+
+
+class TeacherStudentProgress(CamelModel):
+    student_key: str
+    student_name: str
+    solved_count: int = 0
+    total_attempts: int = 0
+    progress: list[StudentProblemProgress]
+
+
+class GroupBrief(CamelModel):
+    id: int
+    name: str
+    invite_code: str
+
+
+class TeacherGroupDetailResponse(CamelModel):
+    group: GroupBrief
+    assignments: list[TeacherAssignmentOut]
+    problems: list[TeacherAssignmentProblemOut]
+    students: list[TeacherStudentProgress]
+
+
+# --- ИИ-аналитика ошибок группы (Срез 4) ---
+
+
+class TeacherAiSummaryRequest(CamelModel):
+    problem_id: int | None = None
+
+
+class CommonMistakeItem(CamelModel):
+    title: str
+    description: str
+    affected_students_count: int
+    recommendation: str
+
+
+class TeacherAiSummaryResponse(CamelModel):
+    overall_summary: str
+    common_mistakes: list[CommonMistakeItem]
+    analyzed_submissions_count: int
+    analyzed_students_count: int
